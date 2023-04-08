@@ -37,6 +37,11 @@
 //!
 //! With all of that in mind, let's dig into it all!
 
+use crate::runtime::Spawner;
+use chrono::Local;
+use std::fmt::Debug;
+use std::thread;
+
 pub mod futures {
     //! This is our module to provide certain kinds of futures to users. In the case
     //! of our [`Sleep`] future here, this is not dependent on the runtime in
@@ -181,30 +186,37 @@ fn library_test() {
     // tasks, but the main function will keep running. This is why we call
     // `wait` to make sure we wait till all futures finish executing before
     // exiting.
+    println!(
+        "1. Current thread name {} {} {}",
+        thread::current().name().unwrap(),
+        current_thread_id(),
+        current_time()
+    );
     runtime::block_on(async {
         const SECOND: u128 = 1000; //ms
-        println!("Begin Asynchronous Execution");
+        println!(
+            "2. Begin Asynchronous Execution,{}, {}",
+            current_thread_id(),
+            current_time()
+        );
         // Create a random number generator so we can generate random numbers
         let mut rng = rand::thread_rng();
-
-        // A small function to generate the time in seconds when we call it.
-        let time = || {
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_secs()
-        };
 
         // Spawn 5 different futures on our executor
         for i in 0..5 {
             // Generate the two numbers between 1 and 9. We'll spawn two futures
             // that will sleep for as many seconds as the random number creates
-            let random = rng.gen_range(1..10);
-            let random2 = rng.gen_range(1..10);
+            let random = rng.gen_range(1..5);
+            let random2 = rng.gen_range(1..5);
 
             // We now spawn a future onto the runtime from within our future
             runtime::spawn(async move {
-                println!("Spawned Fn #{:02}: Start {}", i, time());
+                println!(
+                    "Spawned Fn #{:02}: Start {} {}",
+                    i,
+                    current_thread_id(),
+                    current_time()
+                );
                 // This future will sleep for a certain amount of time before
                 // continuing execution
                 Sleep::new(SECOND * random).await;
@@ -215,9 +227,19 @@ fn library_test() {
                 // execution can change.
                 runtime::spawn(async move {
                     Sleep::new(SECOND * random2).await;
-                    println!("Spawned Fn #{:02}: Inner {}", i, time());
+                    println!(
+                        "Spawned Fn #{:02}: Inner {} {}",
+                        i,
+                        current_thread_id(),
+                        current_time()
+                    );
                 });
-                println!("Spawned Fn #{:02}: Ended {}", i, time());
+                println!(
+                    "Spawned Fn #{:02}: Ended {} {}",
+                    i,
+                    current_thread_id(),
+                    current_time()
+                );
             });
         }
         // To demonstrate that block_on works we block inside this future before
@@ -225,15 +247,23 @@ fn library_test() {
         runtime::block_on(async {
             // This sleeps longer than any of the spawned functions, but we poll
             // this to completion first even if we await here.
-            Sleep::new(11000).await;
-            println!("Blocking Function Polled To Completion");
+            Sleep::new(3000).await;
+            println!(
+                "3. Blocking Function Polled To Completion {} {}",
+                current_thread_id(),
+                current_time()
+            );
         });
     });
 
     // We now wait on the runtime to complete each of the tasks that were
     // spawned before we exit the program
     runtime::wait();
-    println!("End of Asynchronous Execution");
+    println!(
+        "4. End of Asynchronous Execution {} {}",
+        current_thread_id(),
+        current_time()
+    );
 
     // When all is said and done when we run this test we should get output that
     // looks somewhat like this (though in different order):
@@ -256,6 +286,18 @@ fn library_test() {
     // Spawned Fn #03: Inner 1634664698
     // Spawned Fn #02: Inner 1634664702
     // End of Asynchronous Execution
+}
+
+// 获取当前线程唯一id
+pub fn current_thread_id() -> String {
+    let thread = thread::current();
+    let id = thread.id();
+    format!("{:?}", id)
+}
+// 获取当前时间 yyyy-MM-dd HH:MM:ss
+fn current_time() -> String {
+    let now = Local::now();
+    now.format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
 pub mod lazy {
@@ -406,6 +448,8 @@ pub mod lazy {
 }
 
 pub mod runtime {
+    use crate::{current_thread_id, current_time};
+    use std::time::SystemTime;
     use std::{
         // We need a place to put the futures that get spawned onto the runtime
         // somewhere and while we could use something like a `Vec`, we chose a
@@ -565,16 +609,37 @@ pub mod runtime {
         /// Otherwise it drops the task by not putting it back into the queue
         /// since it's completed.
         fn start() {
-            std::thread::spawn(|| loop {
-                let task = match Runtime::get().queue.lock().unwrap().pop_front() {
-                    Some(task) => task,
-                    None => continue,
-                };
-                if task.will_block() {
-                    while let Poll::Pending = task.poll() {}
-                } else {
-                    if let Poll::Pending = task.poll() {
-                        task.wake();
+            std::thread::spawn(|| {
+                loop {
+                    let task = match Runtime::get().queue.lock().unwrap().pop_front() {
+                        Some(task) => task,
+                        None => continue,
+                    };
+                    if task.will_block() {
+                        while let Poll::Pending = task.poll() {
+                            if SystemTime::now()
+                                .duration_since(SystemTime::UNIX_EPOCH)
+                                .unwrap()
+                                .as_micros()
+                                % 1000000
+                                == 1
+                            {
+                                // println!("blocking {} {}", current_thread_id(), current_time());
+                            }
+                        }
+                    } else {
+                        if let Poll::Pending = task.poll() {
+                            if SystemTime::now()
+                                .duration_since(SystemTime::UNIX_EPOCH)
+                                .unwrap()
+                                .as_micros()
+                                % 1000000
+                                == 1
+                            {
+                                // println!("waking {} {}", current_thread_id(), current_time());
+                            }
+                            task.wake();
+                        }
                     }
                 }
             });
@@ -665,14 +730,18 @@ pub mod runtime {
     pub fn spawn(future: impl Future<Output = ()> + Send + Sync + 'static) {
         Runtime::spawner().spawn(future);
     }
+
     /// Block on a `Future` and stop others on the `whorl` runtime until this
     /// one completes.
     pub fn block_on(future: impl Future<Output = ()> + Send + Sync + 'static) {
+        // println!("block on called {} {}", current_thread_id(), current_time());
         Runtime::spawner().spawn_blocking(future);
     }
+
     /// Block further execution of a program until all of the tasks on the
     /// `whorl` runtime are completed.
     pub fn wait() {
+        // println!("wait called {} {}", current_thread_id(), current_time());
         let runtime = Runtime::get();
         while runtime.tasks.load(Ordering::Relaxed) > 0 {}
     }
