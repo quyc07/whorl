@@ -254,8 +254,9 @@ fn library_test() {
     // tasks, but the main function will keep running. This is why we call
     // `wait` to make sure we wait till all futures finish executing before
     // exiting.
-    // block_on方法会创建一个新的Runtime，然后调用这个方法。Runtime通过获取当前future而且不同的轮训执行poll方法，
-    // 直到future返回Ready，并且忽略其他的任务。有时候我们需要阻塞异步函数，把它当做同步函数来使用。
+    // block_on方法会创建一个新的Runtime，然后调用这个方法。
+    // Runtime通过在一个循环中获取当前future而且不停的执行poll方法，直到future返回Ready，并且忽略其他的任务。
+    // 有时候我们需要阻塞异步函数，把它当做同步函数来使用。
     // 一个很好的例子就是运行一个web服务器，你希望它一直运行，而不是偶尔运行，所以阻塞它是有意义的。
     // 在一个单线程的executor里，这会阻塞所有的执行。在我们的例子里，executor是单线程的。
     // 从技术上讲，它在一个单独的线程上运行，所以它会阻塞运行其他的任务，但是main函数会一直运行。
@@ -320,11 +321,11 @@ fn library_test() {
         }
         // To demonstrate that block_on works we block inside this future before
         // we even begin polling the other futures.
-        // 为了演示block_on的工作原理，我们在future里面阻塞，然后再开始轮训其他的future。
+        // 为了演示block_on的工作原理，我们在future里面阻塞，然后再开始poll其他的future。
         runtime::block_on(async {
             // This sleeps longer than any of the spawned functions, but we poll
             // this to completion first even if we await here.
-            // 这个睡眠的时间比生成的future都长，但是我们会先轮训这个future，即使我们在这里await。
+            // 这个睡眠的时间比生成的future都长，但是我们会先poll这个future，即使我们在这里await。
             Sleep::new(3000).await;
             println!(
                 "3. Blocking Function Polled To Completion {} {}",
