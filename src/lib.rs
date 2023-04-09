@@ -1,32 +1,55 @@
 //! # A Whorlwind Tour in Building a Rust Async Executor
+//! 构建Rust异步执行器的Whorlwind之旅
 //!
 //! whorl is a self contained library to run asynchronous Rust code with the
 //! following goals in mind:
+//! whorl是一个自包含的库，用于运行具有以下目标的异步Rust代码：
 //!
 //! - Keep it in one file. You should be able to read this code beginning to end
 //!   like a literate program and understand what each part does and how it fits
 //!   into the larger narrative. The code is organized to tell a story, not
 //!   necessarily how I would normally structure Rust code.
+//!   仅有一个文件，您应该能够从头到尾阅读这段代码，就像一个文学程序一样，了解每个部分的作用以及它如何融入到更大的叙事中。
+//!   代码被组织成一个故事，而不是我通常如何组织Rust代码。
+//!
 //! - Teach others what is going on when you run async code in Rust with a runtime
 //!   like tokio. There is no magic, just many synchronous functions in an async
-//!   trenchcoat.
+//!   trench coat.
+//!   这向你展示了当你在tokio这样的运行时中运行Rust异步代码时到底发生了什么。没有魔法，在异步外表下只有许多同步函数。
+//!
 //! - Explain why different runtimes are incompatible, even if they all run async
 //!   programs.
+//!   解释为什么不同的运行时是不兼容的，即使它们都能运行异步程序。
+//!
 //! - Only use the `std` crate to show that yes all the tools to build one exist
 //!   and if you wanted to, you could.
+//!   仅使用`std` crate来实现，所有用于实现的工具都是，如果你想的话，你也可以。
+//!
 //! - Use only stable Rust. You can build this today; no fancy features needed.
+//!   仅使用稳定的Rust。你可以今天就构建它，不需要任何花哨的功能。
+//!
 //! - Explain why `std` doesn't ship an executor, but just the building blocks.
+//!   解释为什么`std`不会提供一个执行器，而只是提供构建块。
 //!
 //! What whorl isn't:
+//!   whorl不是：
 //! - Performant, this is an adaptation of a class I gave at Rustconf a few
 //!   years back. Its first and foremost goal is to teach *how* an executor
 //!   works, not the best way to make it fast. Reading the tokio source
 //!   code would be a really good thing if you want to learn about how to make
 //!   things performant and scalable.
+//!   不是有效的，这是我在几年前在Rustconf上给出的一个类的适配。
+//!   它的首要目标是教授执行器*如何*工作，而不是使其快速的最佳方法。
+//!   如果你想了解如何使事情变得高效和可扩展，那么阅读tokio源代码将是一个非常好的事情。
+//!
 //! - "The Best Way". Programmers have opinions, I think we should maybe have
 //!   less of them sometimes. Even me. You might disagree with an API design
 //!   choice or a way I did something here and that's fine. I just want you to
 //!   learn how it all works.
+//!   不是“最佳方式”。程序员有自己的观点，我认为我们有时应该减少一些观点。甚至是我。
+//!   你可能会对API设计选择或我在这里做的事情的方式产生不同意见，这很好。
+//!   我只是想让你了解它是如何工作的。
+//!
 //! - An introduction to Rust. This assumes you're somewhat familiar with it and
 //!   while I've done my best to break it down so that it is easy to understand,
 //!   that just might not be the case and I might gloss over details given I've
@@ -34,8 +57,13 @@
 //!   things are confusing, do let me know in the issue tracker. I'll try my best
 //!   to make it easier to grok, but if you've never touched Rust before, this is
 //!   in all honesty not the best place to start.
+//!   不是Rust的介绍。这假设你对它有一定的了解，虽然我已经尽力将其分解，使其易于理解，但这可能并不是这样，
+//!   而且我可能会忽略细节，因为我已经在这里做了6年多的Rust。
+//!   专家盲目是真实的，如果事情令人困惑，请在issue中告诉我。
+//!   我会尽力让它更容易理解，但如果你从未接触过Rust，那么老实说，这不是开始的最佳地方。
 //!
 //! With all of that in mind, let's dig into it all!
+//! 请记住这一点，让我们深入了解它！
 
 use crate::runtime::Spawner;
 use chrono::Local;
@@ -57,6 +85,13 @@ pub mod futures {
     //! implementation of `AsyncRead` for both executors. Not great. Another way
     //! incompatibilities can arise is when those futures depend on the state of the
     //! runtime itself. Now that implementation is locked to the runtime.
+    //! 这是我们的模块所使用到的一些future。[`Sleep`] future不依赖于特定的运行时。我们可以在任何执行器上运行它。
+    //! 不兼容的地方在于，如果您使用依赖于运行时或标准库中未定义的特性的future或类型，则会出现不兼容的情况。
+    //! 例如，`std`截至2021年10月还没有提供`AsyncRead`/`AsyncWrite`trait。
+    //! 因此，如果您想提供异步读取或写入某些内容的功能，则该trait需要为执行器实现。
+    //! 因此，tokio将拥有它自己的`AsyncRead`，我们也将拥有自己的`AsyncRead`。
+    //! 现在，如果一个新的库想要写一个类型，可以异步地从网络套接字读取，那么他们就必须为两个执行器编写`AsyncRead`的实现。
+    //! 另一种不兼容的情况是，当这些future依赖于运行时本身的状态时，该实现将被锁定到运行时。
     //!
     //! Sometimes this is actually okay; maybe the only way to implement
     //! something is depending on the runtime state. In other ways it's not
@@ -65,6 +100,9 @@ pub mod futures {
     //! everyone would need, much like how `Read`/`Write` are in stdlib and we
     //! all can write generic code that says I will work with anything that I
     //! can read or write to.
+    //! 有时这确实是可以的；也许实现某些东西的唯一方法是依赖于运行时状态。在其他方面，这并不是很好。
+    //! 像`AsyncRead`/`AsyncWrite`这样的东西，将来一定会成为标准库的完美补充，因为它们描述了每个人都需要的东西，
+    //! 就像`Read`/`Write`在标准库中一样，我们都可以编写通用代码，也就是说，我将与任何我可以读取或写入的东西一起工作。
     //!
     //! This is why, however, things like Future, Context, Wake, Waker etc. all
     //! the components we need to build an executor are in the standard library.
@@ -74,6 +112,12 @@ pub mod futures {
     //! though, we can't avoid it. Something to keep in mind as you navigate the
     //! async ecosystem and see that some libraries can work on any executor or
     //! some ask you to opt into which executor you want with a feature flag.
+    //! 这就是为什么Future，Context，Wake，Waker等等，我们需要构建执行器的所有组件都在标准库中的原因。
+    //! 这意味着任何人都可以构建执行器并接受大多数future或与大多数库一起使用，而无需担心他们使用哪个执行器。
+    //! 这减轻了维护者和用户的负担。但是，在某些情况下，我们无法避免这种情况。
+    //! 在浏览异步生态系统时，请记住这一点，并注意一些库可以在任何执行器上工作，或者一些库要求您根据特性标签选择要使用的执行器。
+    //! 例如，tokio提供了一个`tokio::main`宏，它会为您创建一个tokio执行器，然后在其中运行您的程序。
+    //! 如果您使用`async-std`，则需要使用`async-std::main`宏，它会为您创建一个`async-std`执行器，然后在其中运行您的程序。
     use std::{
         future::Future,
         pin::Pin,
@@ -819,7 +863,7 @@ pub mod runtime {
         /// constructs a `Task` and then pushes it to the back of the queue.
         /// 这是 `spawn` 函数，用于在队列中实际创建新的 `Task`。
         /// 它接收 `Future`，构造一个 `Task`，然后将其推送到队列的末尾。
-        fn spawn(self, future: impl Future<Output = ()> + Send + Sync + 'static) {
+        fn spawn(self, future: impl Future<Output=()> + Send + Sync + 'static) {
             self.inner_spawn(Task::new(false, future));
         }
         /// This is the function that gets called by the `spawn_blocking` function to
@@ -829,7 +873,7 @@ pub mod runtime {
         /// this future completes.
         /// 这是 `spawn_blocking` 函数，用于在队列中实际创建新的 `Task`。
         /// 它接收 `Future`，构造一个 `Task`，然后将其推送到队列的前端，运行时将检查它是否应该阻塞，然后阻塞直到此 future 完成。
-        fn spawn_blocking(self, future: impl Future<Output = ()> + Send + Sync + 'static) {
+        fn spawn_blocking(self, future: impl Future<Output=()> + Send + Sync + 'static) {
             self.inner_spawn_blocking(Task::new(true, future));
         }
         /// This function just takes a `Task` and pushes it onto the queue. We use this
@@ -852,14 +896,14 @@ pub mod runtime {
 
     /// Spawn a non-blocking `Future` onto the `whorl` runtime
     /// 将非阻塞的 `Future` 放入 `whorl` 运行时
-    pub fn spawn(future: impl Future<Output = ()> + Send + Sync + 'static) {
+    pub fn spawn(future: impl Future<Output=()> + Send + Sync + 'static) {
         Runtime::spawner().spawn(future);
     }
 
     /// Block on a `Future` and stop others on the `whorl` runtime until this
     /// one completes.
     /// 阻塞 `Future`，并在 `whorl` 运行时停止其他任务，直到此任务完成。
-    pub fn block_on(future: impl Future<Output = ()> + Send + Sync + 'static) {
+    pub fn block_on(future: impl Future<Output=()> + Send + Sync + 'static) {
         // println!("block on called {} {}", current_thread_id(), current_time());
         Runtime::spawner().spawn_blocking(future);
     }
@@ -885,7 +929,7 @@ pub mod runtime {
         /// to worry about pinning or more complicated things in the runtime. We
         /// also need to make sure this is `Send + Sync` so we can use it across threads
         /// and so we lock the `Pin<Box<dyn Future>>` inside a `Mutex`.
-        future: Mutex<Pin<Box<dyn Future<Output = ()> + Send + Sync + 'static>>>,
+        future: Mutex<Pin<Box<dyn Future<Output=()> + Send + Sync + 'static>>>,
         /// We need a way to check if the runtime should block on this task and
         /// so we use a boolean here to check that!
         block: bool,
@@ -896,7 +940,7 @@ pub mod runtime {
         /// how many tasks there are, pinning the `Future`, and wrapping it all
         /// in an `Arc`.
         /// 构造新任务，并增加运行时中的任务数量，pinning `Future`，并将其包装在 `Arc` 中。
-        fn new(block: bool, future: impl Future<Output = ()> + Send + Sync + 'static) -> Arc<Self> {
+        fn new(block: bool, future: impl Future<Output=()> + Send + Sync + 'static) -> Arc<Self> {
             Runtime::get().tasks.fetch_add(1, Ordering::Relaxed);
             Arc::new(Task {
                 future: Mutex::new(Box::pin(future)),
