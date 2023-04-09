@@ -85,12 +85,17 @@ pub mod futures {
     /// future it's used in without blocking the thread itself. It will be
     /// polled and if the timer is not up, then it will yield execution to the
     /// executor.
+    /// 用以阻塞当前线程的future，不会阻塞线程，而是阻塞当前future的执行，直到时间到了，才会继续执行当前future，
+    /// 而不是阻塞线程，所以不会阻塞其他future的执行，这是一个异步的sleep，而不是同步的sleep，同步的sleep会阻塞线程，
+    /// 也就是说，同步的sleep会阻塞其他future的执行。
     pub struct Sleep {
         /// What time the future was created at, not when it was started to be
         /// polled.
+        /// future创建的时间，不是开始poll的时间
         now: SystemTime,
         /// How long in the future in ms we must wait till we return
         /// that the future has finished polling.
+        /// future需要等待的时间，单位是ms，也就是说，如果这个值是1000，那么就是1s，如果是2000，那么就是2s，以此类推
         ms: u128,
     }
 
@@ -98,6 +103,8 @@ pub mod futures {
         /// A simple API whereby we take in how long the consumer of the API
         /// wants to sleep in ms and set now to the time of creation and
         /// return the type itself, which is a Future.
+        /// 一个简单的API，接收一个参数，这个参数是需要等待的时间，单位是ms，并设置当前时间为Sleep创建时间，
+        /// 返回一个future，这个future就是Sleep。
         pub fn new(ms: u128) -> Self {
             Self {
                 now: SystemTime::now(),
@@ -109,6 +116,8 @@ pub mod futures {
     impl Future for Sleep {
         /// We don't need to return a value for [`Sleep`], as we just want it to
         /// block execution for a while when someone calls `await` on it.
+        /// [`Sleep`]不需要返回值，因为我们只是想让它阻塞一段时间，直到时间到了，才会继续执行当前future
+        /// 这里的Output就是返回值的类型，因为我们不需要返回值，所以这里就是()，也就是空元组。
         type Output = ();
         /// The actual implementation of the future, where you can call poll on
         /// [`Sleep`] if it's pinned and the pin has a mutable reference to
@@ -120,6 +129,12 @@ pub mod futures {
         /// that you need access to the waker to wake up the task in a special
         /// way. Waking up the task just means we put it back into the executor
         /// to be polled again.
+        /// 实现future的poll方法，这个方法会被调用，如果future被pin了，并且pin有一个可变的引用指向Sleep，
+        /// 在这个方法里，我们不需要使用Context，因为我们的executor会自动调用这个方法，所以我们不需要手动调用，
+        /// 但是如果你手动实现一个future，你可能需要使用Context，因为你需要手动调用这个方法，而不是让executor自动调用。
+        /// 这个方法的返回值是Poll<Self::Output>，也就是Poll<()>。
+        /// Poll是一个枚举，有两个值，Pending和Ready，Pending表示future还没有准备好，需要再次调用poll方法，
+        /// Ready表示future已经准备好了，可以继续执行。
         fn poll(self: Pin<&mut Self>, _: &mut Context) -> Poll<Self::Output> {
             // If enough time has passed, then when we're polled we say that
             // we're ready and the future has slept enough. If not, we just say
@@ -161,6 +176,9 @@ pub mod futures {
 /// you should use the command `cargo test -- --nocapture` so that you can see
 /// the output of `println` being used, otherwise it'll look like nothing is
 /// happening at all for a while.
+/// 为了理解我们要构建的内容，我们需要看一下我们要运行的内容，以及我们期望看到的输出。
+/// 注意，如果你想要运行这个测试，你应该使用`cargo test -- --nocapture`命令，这样你就可以看到`println`的输出，
+/// 否则，你会看到一段时间什么都没有发生。
 fn library_test() {
     // We're going to import our Sleep future to make sure that it works,
     // because it's not a complicated future and it's easy to see the
@@ -175,6 +193,12 @@ fn library_test() {
     // and it's best we dabble not too much in it.
     use std::time::SystemTime;
 
+    println!(
+        "1. Current thread name {} {} {}",
+        thread::current().name().unwrap(),
+        current_thread_id(),
+        current_time()
+    );
     // This function causes the runtime to block on this future. It does so by
     // just taking this future and polling it till completion in a loop and
     // ignoring other tasks on the queue. Sometimes you need to block on async
@@ -186,12 +210,12 @@ fn library_test() {
     // tasks, but the main function will keep running. This is why we call
     // `wait` to make sure we wait till all futures finish executing before
     // exiting.
-    println!(
-        "1. Current thread name {} {} {}",
-        thread::current().name().unwrap(),
-        current_thread_id(),
-        current_time()
-    );
+    // block_on方法会创建一个新的Runtime，然后调用这个方法。Runtime通过获取当前future而且不同的轮训执行poll方法，
+    // 直到future返回Ready，并且忽略其他的任务。有时候我们需要阻塞异步函数，把它当做同步函数来使用。
+    // 一个很好的例子就是运行一个web服务器，你希望它一直运行，而不是偶尔运行，所以阻塞它是有意义的。
+    // 在一个单线程的executor里，这会阻塞所有的执行。在我们的例子里，executor是单线程的。
+    // 从技术上讲，它在一个单独的线程上运行，所以它会阻塞运行其他的任务，但是main函数会一直运行。
+    // 这就是为什么我们调用wait方法，来确保我们等待所有的future执行完毕，然后再退出。
     runtime::block_on(async {
         const SECOND: u128 = 1000; //ms
         println!(
@@ -200,16 +224,20 @@ fn library_test() {
             current_time()
         );
         // Create a random number generator so we can generate random numbers
+        // 创建一个随机数生成器，这样我们就可以生成随机数
         let mut rng = rand::thread_rng();
 
         // Spawn 5 different futures on our executor
+        // 生成5个不同的future，然后在executor上执行
         for i in 0..5 {
             // Generate the two numbers between 1 and 9. We'll spawn two futures
             // that will sleep for as many seconds as the random number creates
+            // 生成两个1到9之间的随机数。我们会生成两个future，这两个future会睡眠多少秒，取决于随机数的大小
             let random = rng.gen_range(1..5);
             let random2 = rng.gen_range(1..5);
 
             // We now spawn a future onto the runtime from within our future
+            // 我们现在在future里面，从runtime上生成一个future
             runtime::spawn(async move {
                 println!(
                     "Spawned Fn #{:02}: Start {} {}",
@@ -219,12 +247,16 @@ fn library_test() {
                 );
                 // This future will sleep for a certain amount of time before
                 // continuing execution
+                // 这个future会睡眠一段时间，然后继续执行
                 Sleep::new(SECOND * random).await;
                 // After the future waits for a while, it then spawns another
                 // future before printing that it finished. This spawned future
                 // then sleeps for a while and then prints out when it's done.
                 // Since we're spawning futures inside futures, the order of
                 // execution can change.
+                // 在future等待一段时间后，它会生成另一个future，然后打印它已经完成。
+                // 这个生成的future会睡眠一段时间，然后打印它已经完成。
+                // 由于我们在future里面生成future，所以执行的顺序会改变。
                 runtime::spawn(async move {
                     Sleep::new(SECOND * random2).await;
                     println!(
@@ -244,9 +276,11 @@ fn library_test() {
         }
         // To demonstrate that block_on works we block inside this future before
         // we even begin polling the other futures.
+        // 为了演示block_on的工作原理，我们在future里面阻塞，然后再开始轮训其他的future。
         runtime::block_on(async {
             // This sleeps longer than any of the spawned functions, but we poll
             // this to completion first even if we await here.
+            // 这个睡眠的时间比生成的future都长，但是我们会先轮训这个future，即使我们在这里await。
             Sleep::new(3000).await;
             println!(
                 "3. Blocking Function Polled To Completion {} {}",
@@ -258,6 +292,7 @@ fn library_test() {
 
     // We now wait on the runtime to complete each of the tasks that were
     // spawned before we exit the program
+    // 现在我们等待runtime完成所有的任务，然后再退出程序
     runtime::wait();
     println!(
         "4. End of Asynchronous Execution {} {}",
@@ -294,6 +329,7 @@ pub fn current_thread_id() -> String {
     let id = thread.id();
     format!("{:?}", id)
 }
+
 // 获取当前时间 yyyy-MM-dd HH:MM:ss
 fn current_time() -> String {
     let now = Local::now();
@@ -309,6 +345,10 @@ pub mod lazy {
         // means we need to use the actual type that all of these types use to hold
         // the data: [`UnsafeCell`]! We'll see below where this is used and how, but
         // just know that this will let us set some global values at runtime!
+        // 我们不想使用`static mut`，因为这是UB，所以我们需要一种方法来在运行时设置我们的代码的静态变量。
+        // 由于我们希望它能跨线程工作，所以我们不能在这里使用`Cell`或`RefCell`，而且由于它是一个静态变量，
+        // 我们不能使用`Mutex`，因为它的`new`函数不是const。这意味着我们需要使用这些类型用来保存数据的实际类型：[`UnsafeCell`]！
+        // 我们将在下面看到它的使用方式，但是要知道，这将让我们在运行时设置一些全局值！
         cell::UnsafeCell,
         mem::{
             // If you want to import the module to use while also specifying other
@@ -318,6 +358,10 @@ pub mod lazy {
             // exported at the module level and not encapsulated in a type so that
             // it's more clear where it comes from, but that's a personal
             // preference! You could just as easily import `swap` here instead!
+            // 如果你想导入模块来使用，同时还指定其他导入，你可以使用self来做到这一点。
+            // 在这种情况下，它将让我们调用`mem::swap`，同时让我们只使用`MaybeUninit`而不需要任何额外的路径前缀。
+            // 我倾向于为模块级别导出的函数而不是封装在类型中的函数执行此操作，以便更清楚地了解它来自哪里，但这是个人偏好！
+            // 你也可以在这里导入`swap`！
             self,
             // `MaybeUninit` is the only way to represent a value that's possibly
             // uninitialized without causing instant UB with `std::mem::uninitialized`
@@ -328,6 +372,9 @@ pub mod lazy {
             // until we initialize it once and only once without causing UB and
             // having nasal demons come steal random data and give everyone a bad
             // time.
+            // `MaybeUninit`是表示可能未初始化的值的唯一方法，而不会导致使用`std::mem::uninitialized`或`std::mem::zeroed`立即产生UB。
+            // 有关更多信息，请参阅文档：https://doc.rust-lang.org/stable/std/mem/union.MaybeUninit.html#initialization-invariant
+            // 我们需要使用它来保证一个没有任何数据的UnsafeCell不会导致UB，直到我们对其进行唯一一次初始化。
             MaybeUninit,
         },
         // Sometimes you need to make sure that something is done once and
@@ -338,19 +385,27 @@ pub mod lazy {
         // threads that it only runs the initialization function once and has
         // the other threads wait until it's done before letting them continue
         // with their execution.
+        // 有时你需要确保某件事只做一次。我们还可能希望确保无论在哪个线程上都是如此。`Once`，一个非常好的同步类型，就是为了这个目的。
+        // 它还具有一个很好的属性，即如果它被用在多线程同时初始化时，则它保证只运行初始化函数一次，并且其他线程等待直到它完成，然后才让它们继续执行。
         sync::Once,
     };
+
     /// We want to have a static value that's set at runtime and this executor will
     /// only use libstd. As of 10/26/21, the lazy types in std are still only on
     /// nightly and we can't use another crate, so crates like `once_cell` and
     /// `lazy_static` are also out. Thus, we create our own Lazy type so that it will
     /// calculate the value only once and only when we need it.
+    /// 我们想要一个在运行时设置的静态值，而且这个执行器只使用标准库。
+    /// 截至2021年10月26日，std中的延迟类型仍然只在夜间版中，我们不能使用另一个crate，因此像`once_cell`和`lazy_static`这样的crate也不行。
+    /// 因此，我们创建自己的Lazy类型，以便它只计算一次值，并且仅在我们需要时才计算。
     pub struct Lazy<T> {
         /// `Once` is a neat synchronization primitive that we just talked about
         /// and this is where we need it! We want to make sure we only write into
         /// the value of the Lazy type once and only once. Otherwise we'd have some
         /// really bad things happen if we let static values be mutated. It'd break
         /// thread safety!
+        /// Once是一个很好的同步原语，我们刚刚谈到了它，这就是我们需要它的地方！我们想确保我们只将值写入Lazy类型一次且仅一次。
+        /// 否则，如果我们让静态值被改变，就会发生一些非常糟糕的事情。它会破坏线程安全！
         once: Once,
         /// The cell is where we hold our data. The use of `UnsafeCell` is what lets
         /// us sidestep Rust's guarantees, provided we actually use it correctly and
@@ -364,6 +419,10 @@ pub mod lazy {
         /// call drop when it's not needed anymore. We could get away with not doing
         /// it though since we're only using it for static values, but let's be
         /// thorough here!
+        /// cell是我们保存数据的地方。使用`UnsafeCell`是让我们绕过Rust的保证限制，只要我们正确使用它并且仍然遵守这些保证。
+        /// Rust不总是能够确认程序是安全的，即使它确实是安全的，因此UnSafe代码提供的灵活性使我们能够处理编译器无法理解的情况。
+        /// 我们还在这里使用`MaybeUninit`类型来避免未初始化数据的未定义行为。但是我们需要自己丢弃内部值，以避免内存泄漏，因为数据可能未初始化，
+        /// 因此`MaybeUninit`不会在不再需要时调用drop。虽然我们只使用它来保存静态值，但我们还是要彻底地做到这一点！
         cell: UnsafeCell<MaybeUninit<T>>,
     }
 
@@ -373,6 +432,9 @@ pub mod lazy {
         /// make here are also const and so this will just work. The compiler will
         /// figure it all out and make sure the `Lazy` static value exists in our
         /// final binary.
+        /// 我们必须使用const fn来构造类型，以便它可以在`static`上下文中使用。
+        /// 好的是，我们在这里调用的所有函数都是const的，因此这将正常工作。
+        /// 编译器会弄清楚一切，并确保`Lazy`静态值存在于我们的最终二进制文件中。
         pub const fn new() -> Self {
             Self {
                 once: Once::new(),
@@ -382,12 +444,14 @@ pub mod lazy {
         /// We want a way to check if we have initialized the value so that we can
         /// get the value from cell without causing who knows what kind of bad
         /// things if we read garbage data.
+        /// 我们想要一种方法来检查我们是否已经初始化了值，以便我们可以从cell中获取值，而不会导致我们读取垃圾数据而引起未知的坏事情。
         fn is_initialized(&self) -> bool {
             self.once.is_completed()
         }
 
         /// This function will either grab a reference to the type or creates it
         /// with a given function
+        ///
         pub fn get_or_init(&self, func: fn() -> T) -> &T {
             self.once.call_once(|| {
                 // /!\ SAFETY /!\: We only ever write to the cell once
@@ -396,6 +460,9 @@ pub mod lazy {
                 // `&mut MaybeUninit`. That's when we call `write` on `MaybeUninit`
                 // to pass the value of the function into the now initialized
                 // `MaybeUninit`.
+                // 这是安全的！我们只会将值写入一次。
+                // 我们首先获取一个`*mut MaybeUninit`到cell，并将其转换为`&mut MaybeUninit`。
+                // 这时我们调用`MaybeUninit`上的`write`将函数的值传递到现在初始化的`MaybeUninit`。
                 (unsafe { &mut *self.cell.get() }).write(func());
             });
             // /!\ SAFETY /!\: We already made sure `Lazy` was initialized with our call to
@@ -406,6 +473,10 @@ pub mod lazy {
             // a `&MaybeUninit` which then lets us call `assume_init_ref` to get
             // the `&T`. This function - much like `get` - is also unsafe, but since we
             // know that the value is initialized it's fine to call this!
+            // 这是安全的！我们已经确保`Lazy`已经初始化了。
+            // 我们现在想要实际获取我们写入的值，以便我们可以使用它！
+            // 我们从cell中获取`*mut MaybeUninit`并将其转换为`&MaybeUninit`，然后我们就可以调用`assume_init_ref`来获取`&T`。
+            // `assume_init_ref`这个函数 - 就像`get`一样 - 也是不安全的，但是由于我们知道值已经初始化，所以可以调用这个函数！
             unsafe { &(*self.cell.get()).assume_init_ref() }
         }
     }
@@ -415,6 +486,8 @@ pub mod lazy {
     /// check if the value exists, swap it out with an uninitialized value and then
     /// change `MaybeUninit<T>` into just a `T` with a call to `assume_init` and
     /// then call `drop` on `T` itself
+    /// 我们现在需要手动实现`Drop`，特别是因为`MaybeUninit`需要我们自己丢弃它所持有的值，只有当它存在时才需要这样做。
+    /// 我们检查值是否存在，将其与未初始化的值交换，然后将`MaybeUninit<T>`转换为`T`，并通过调用`assume_init`来改变`T`，然后调用`T`上的`drop`。
     impl<T> Drop for Lazy<T> {
         fn drop(&mut self) {
             if self.is_initialized() {
@@ -443,7 +516,18 @@ pub mod lazy {
     /// threads. This means we can set `Lazy` as `Send + Sync` even though the
     /// internal `UnsafeCell` is !Sync in a safe way since we upheld the invariants
     /// for these traits.
+    /// 现在你可能会问自己为什么我们要手动实现这些trait，以及为什么这样做是不安全的。
+    /// `UnsafeCell`是这里的一个重要原因，你可以通过注释掉这两行并尝试编译代码来看到这一点。
+    /// 由于自动trait的工作方式，如果任何部分不是`Send`和`Sync`，那么我们就不能在静态变量中使用`Lazy`。
+    /// 请注意，自动trait是编译器特定的东西，如果类型中的所有部分都实现了trait，那么该类型也会实现该trait。
+    /// `Send`和`Sync`就是很好的例子，如果类型中所有部分都实现了它们，那么任何类型也都会变成`Send`和/或`Sync`。
+    /// `UnsafeCell`特别实现了!Sync，因为它不是`Sync`，所以它不能在`static`中使用。
+    /// 我们可以通过在这里为`Lazy`实现这些trait来覆盖此行为。
+    /// 也就是说，我们确认只有在`Lazy`内部的类型`T`是`Sync`时才是`Send + Sync`，以此保证了`Send + Sync`的不变量。
+    /// 我们知道这是可以的，因为`UnsafeCell`中的类型可以通过`&'static`安全地引用，并且它所持有的类型也可以安全地跨线程使用。
+    /// 这意味着我们可以在安全的方式中将`Lazy`设置为`Send + Sync`，即使内部的`UnsafeCell`是!Sync，因为我们保证了这些trait的不变量。
     unsafe impl<T: Send> Send for Lazy<T> {}
+
     unsafe impl<T: Send + Sync> Sync for Lazy<T> {}
 }
 
@@ -579,16 +663,28 @@ pub mod runtime {
     /// tasks in parallel on separate threads and if it has more tasks than
     /// threads, it runs them concurrently on those threads.
     ///
+    /// 这就是我们一直在谈论的东西。它是 `Runtime`！
+    /// 它是什么？它能做什么？好吧，`Runtime` 就是驱动我们的异步代码执行完成的东西！
+    /// 还记得异步代码吗？它只是一些代码，它会运行一段时间，然后通过Sleep函数暂停一段时间，
+    /// 然后在轮询时继续运行，然后重复这个过程，直到完成。
+    /// 实际上，这意味着代码是使用同步函数运行的，这些函数以并发方式驱动任务。
+    /// 如果执行器是多线程的，它们也可以并发运行 和/或 并行运行。
+    /// Tokio 就是这种模型的一个很好的例子，它在不同的线程上并行运行任务，
+    /// 如果任务数多于线程数，它会在这些线程上并发运行它们。
+    ///
     /// Our `Runtime` in particular has:
     pub(crate) struct Runtime {
         /// A queue to place all of the tasks that are spawned on the runtime.
+        /// 一个队列，用于放置在运行时上生成的所有任务。
         queue: Queue,
         /// A `Spawner` which can spawn tasks onto our queue for us easily and
         /// lets us call `spawn` and `block_on` with ease.
+        /// 一个 `Spawner`，它可以轻松地将任务放入我们的队列中，让我们可以轻松地调用 `spawn` 和 `block_on`。
         spawner: Spawner,
         /// A counter for how many Tasks are on the runtime. We use this in
         /// conjunction with `wait` to block until there are no more tasks on
         /// the executor.
+        ///
         tasks: AtomicUsize,
     }
 
@@ -599,6 +695,12 @@ pub mod runtime {
     /// implement 3 functions: `start` to actually get async code running, `get`
     /// so that we can get references to the runtime, and `spawner` a
     /// convenience function to get a `Spawner` to spawn tasks onto the `Runtime`.
+    /// 我们的运行时类型被设计成只有一个运行时。但是在生产代码中，您可能希望有多个运行时。
+    /// 例如，您限制了免费版本上运行时的功能，并让非免费版本可以使用尽可能多的资源。
+    /// 我们实现了3个函数：
+    /// `start` 来实际运行异步代码。
+    /// `get` 以便我们可以获取对运行时的引用。
+    /// `spawner` 一个方便的函数，获取一个 `Spawner` 来将任务放入 `Runtime`。
     impl Runtime {
         /// This is what actually drives all of our async code. We spawn a
         /// separate thread that loops getting the next task off the queue and
@@ -608,6 +710,11 @@ pub mod runtime {
         /// the queue in the non-blocking version if it's still pending.
         /// Otherwise it drops the task by not putting it back into the queue
         /// since it's completed.
+        /// 这就是实际驱动我们所有异步代码的程序。
+        /// 我们在一个单独的线程中启动一个循环，从队列中获取下一个任务，
+        /// 如果存在，则poll它，如果不存在，则继续循环获取任务。
+        /// 获取任务后，检查任务是否应该阻塞，如果是，则只会持续poll该任务，直到任务完成！
+        /// 否则，它会poll一次任务，如果任务仍然未完成，则以非阻塞的方式将其放回队列中。
         fn start() {
             std::thread::spawn(|| {
                 loop {
@@ -646,11 +753,13 @@ pub mod runtime {
         }
 
         /// A function to get a reference to the `Runtime`
+        /// 一个获取 `Runtime` 引用的函数
         pub(crate) fn get() -> &'static Runtime {
             RUNTIME.get_or_init(setup_runtime)
         }
 
         /// A function to get a new `Spawner` from the `Runtime`
+        /// 一个从 `Runtime` 获取新 `Spawner` 的函数
         pub(crate) fn spawner() -> Spawner {
             Runtime::get().spawner.clone()
         }
@@ -659,6 +768,8 @@ pub mod runtime {
     /// This is the initialization function for our `RUNTIME` static below. We
     /// make a call to start it up and then return a `Runtime` to be put in the
     /// static value
+    /// 这是我们下面的 `RUNTIME` 静态变量的初始化函数。
+    /// 我们调用它来启动`RUNTIME`，然后返回一个 `Runtime` 以放入静态值 RUNTIME 中。
     fn setup_runtime() -> Runtime {
         // This is okay to call because any calls to `Runtime::get()` in here will be blocked
         // until we fully initialize the `Lazy` type thanks to the `call_once`
@@ -666,6 +777,9 @@ pub mod runtime {
         // So we start the runtime inside the initialization function, which depends
         // on it being initialized, but it is able to wait until the runtime is
         // actually initialized and so it all just works.
+        // 这里调用是可以的，因为在这里调用 `Runtime::get()` 时，由于 `Once` 上的 `call_once` 函数会阻塞，直到它完成初始化，
+        // 所以任何对 `Runtime::get()` 的调用都会被阻塞，直到我们完全初始化了 `Lazy` 类型。
+        // 所以我们在初始化函数中启动运行时，这取决于它是否已初始化，这里阻塞直至运行时完成初始化，所以一切都能正常工作。
         Runtime::start();
         let queue = Arc::new(Mutex::new(LinkedList::new()));
         Runtime {
@@ -679,6 +793,7 @@ pub mod runtime {
 
     /// With all of the work we did in `crate::lazy` we can now create our static type to represent
     /// the singular `Runtime` when it is finally initialized by the `setup_runtime` function.
+    /// 在 `crate::lazy` 中完成了所有工作后，我们现在可以创建一个静态类型，以表示最终由 `setup_runtime` 函数初始化的单个 `Runtime`。
     static RUNTIME: crate::lazy::Lazy<Runtime> = crate::lazy::Lazy::new();
 
     // The queue is a single linked list that contains all of the tasks being
@@ -687,11 +802,15 @@ pub mod runtime {
     // queue state at a given time. This isn't the most efficient pattern
     // especially if we wanted to have the runtime be truly multi-threaded, but
     // for the purposes of the code this works just fine.
+    // 队列是一个单链表，其中包含在其上运行的所有任务。
+    // 我们使用一个带有指向它的 Arc 的 Mutex 来访问它，以便我们可以确保在给定时间只有一个「事物」能够获取队列状态。
+    // 这种模式不是最高效的，特别是如果我们想让运行时真正地多线程化，但是对于这段代码来说，这是可以的。
     type Queue = Arc<Mutex<LinkedList<Arc<Task>>>>;
 
     /// We've talked about the `Spawner` a lot up till this point, but it's
     /// really just a light wrapper around the queue that knows how to push
     /// tasks onto the queue and create new ones.
+    /// 我们一直在讨论 `Spawner`，但它实际上只是一个轻量级的包装器，它知道如何将任务推送到队列中并创建新任务。
     #[derive(Clone)]
     pub(crate) struct Spawner {
         queue: Queue,
@@ -701,7 +820,9 @@ pub mod runtime {
         /// This is the function that gets called by the `spawn` function to
         /// actually create a new `Task` in our queue. It takes the `Future`,
         /// constructs a `Task` and then pushes it to the back of the queue.
-        fn spawn(self, future: impl Future<Output = ()> + Send + Sync + 'static) {
+        /// 这是 `spawn` 函数，用于在队列中实际创建新的 `Task`。
+        /// 它接收 `Future`，构造一个 `Task`，然后将其推送到队列的末尾。
+        fn spawn(self, future: impl Future<Output=()> + Send + Sync + 'static) {
             self.inner_spawn(Task::new(false, future));
         }
         /// This is the function that gets called by the `spawn_blocking` function to
@@ -709,37 +830,46 @@ pub mod runtime {
         /// constructs a `Task` and then pushes it to the front of the queue
         /// where the runtime will check if it should block and then block until
         /// this future completes.
-        fn spawn_blocking(self, future: impl Future<Output = ()> + Send + Sync + 'static) {
+        /// 这是 `spawn_blocking` 函数，用于在队列中实际创建新的 `Task`。
+        /// 它接收 `Future`，构造一个 `Task`，然后将其推送到队列的前端，运行时将检查它是否应该阻塞，然后阻塞直到此 future 完成。
+        fn spawn_blocking(self, future: impl Future<Output=()> + Send + Sync + 'static) {
             self.inner_spawn_blocking(Task::new(true, future));
         }
         /// This function just takes a `Task` and pushes it onto the queue. We use this
         /// both for spawning new `Task`s and to push old ones that get woken up
         /// back onto the queue.
+        /// 这个函数只是接收一个 `Task` 并将其推送到队列中。
+        /// 我们用它来启动新的 `Task`，以及将唤醒的旧任务推送回队列。
         fn inner_spawn(self, task: Arc<Task>) {
             self.queue.lock().unwrap().push_back(task);
         }
         /// This function takes a `Task` and pushes it to the front of the queue
         /// if it is meant to block. We use this both for spawning new blocking
         /// `Task`s and to push old ones that get woken up back onto the queue.
+        /// 如果它是用于阻塞的，则此函数将 `Task` 推送到队列的前端。
+        /// 我们用它来启动新的阻塞 `Task`，以及将唤醒的旧任务推送回队列。
         fn inner_spawn_blocking(self, task: Arc<Task>) {
             self.queue.lock().unwrap().push_front(task);
         }
     }
 
     /// Spawn a non-blocking `Future` onto the `whorl` runtime
-    pub fn spawn(future: impl Future<Output = ()> + Send + Sync + 'static) {
+    /// 将非阻塞的 `Future` 放入 `whorl` 运行时
+    pub fn spawn(future: impl Future<Output=()> + Send + Sync + 'static) {
         Runtime::spawner().spawn(future);
     }
 
     /// Block on a `Future` and stop others on the `whorl` runtime until this
     /// one completes.
-    pub fn block_on(future: impl Future<Output = ()> + Send + Sync + 'static) {
+    /// 阻塞 `Future`，并在 `whorl` 运行时停止其他任务，直到此任务完成。
+    pub fn block_on(future: impl Future<Output=()> + Send + Sync + 'static) {
         // println!("block on called {} {}", current_thread_id(), current_time());
         Runtime::spawner().spawn_blocking(future);
     }
 
     /// Block further execution of a program until all of the tasks on the
     /// `whorl` runtime are completed.
+    /// 阻止程序的进一步执行，直到 `whorl` 运行时上的所有任务完成。
     pub fn wait() {
         // println!("wait called {} {}", current_thread_id(), current_time());
         let runtime = Runtime::get();
@@ -750,13 +880,15 @@ pub mod runtime {
     /// that may or may not be completed. We spawn `Task`s to be run and poll
     /// them until completion in a non-blocking manner unless specifically asked
     /// for.
+    /// `Task` 是执行器的基本单元。它表示一个可能已完成或未完成的 `Future`。
+    /// 我们启动 `Task` 来运行，并以非阻塞方式轮询它们，直到完成，除非明确制定为阻塞任务。
     struct Task {
         /// This is the actual `Future` we will poll inside of a `Task`. We `Box`
         /// and `Pin` the `Future` when we create a task so that we don't need
         /// to worry about pinning or more complicated things in the runtime. We
         /// also need to make sure this is `Send + Sync` so we can use it across threads
         /// and so we lock the `Pin<Box<dyn Future>>` inside a `Mutex`.
-        future: Mutex<Pin<Box<dyn Future<Output = ()> + Send + Sync + 'static>>>,
+        future: Mutex<Pin<Box<dyn Future<Output=()> + Send + Sync + 'static>>>,
         /// We need a way to check if the runtime should block on this task and
         /// so we use a boolean here to check that!
         block: bool,
@@ -766,7 +898,8 @@ pub mod runtime {
         /// This constructs a new task by increasing the count in the runtime of
         /// how many tasks there are, pinning the `Future`, and wrapping it all
         /// in an `Arc`.
-        fn new(block: bool, future: impl Future<Output = ()> + Send + Sync + 'static) -> Arc<Self> {
+        /// 构造新任务，并增加运行时中的任务数量，pinning `Future`，并将其包装在 `Arc` 中。
+        fn new(block: bool, future: impl Future<Output=()> + Send + Sync + 'static) -> Arc<Self> {
             Runtime::get().tasks.fetch_add(1, Ordering::Relaxed);
             Arc::new(Task {
                 future: Mutex::new(Box::pin(future)),
@@ -780,6 +913,10 @@ pub mod runtime {
         /// restrict a method such that it will only work when `self` is a
         /// certain type. In this case you can only call `waker` if the type is
         /// a `&Arc<Task>`. If it was just `Task` it would not compile or work.
+        /// 我们希望将 `Task` 本身用作 `Waker`，我们将在下面进一步讨论。
+        /// 这是一个方便的方法来构造一个新的 `Waker`。
+        /// 有趣的是，对于 `poll` 和这里，我们可以限制一个方法，使其仅在 `self` 是某种类型时才有效。
+        /// 在这种情况下，只有当类型是 `&Arc<Task>` 时，才能调用 `waker`。
         fn waker(self: &Arc<Self>) -> Waker {
             self.clone().into()
         }
@@ -787,6 +924,8 @@ pub mod runtime {
         /// This is a convenience method to `poll` a `Future` by creating the
         /// `Waker` and `Context` and then getting access to the actual `Future`
         /// inside the `Mutex` and calling `poll` on that.
+        /// 这是一个方便的方法来 `poll` `Future`，通过创建 `Waker` 和 `Context`，
+        /// 然后获取 `Mutex` 内部的实际 `Future` 的访问权限，并对其调用 `poll`。
         fn poll(self: &Arc<Self>) -> Poll<()> {
             let waker = self.waker();
             let mut ctx = Context::from_waker(&waker);
@@ -794,6 +933,7 @@ pub mod runtime {
         }
 
         /// Checks the `block` field to see if the `Task` is blocking.
+        /// 检查 `block` 字段，以查看 `Task` 是否阻塞。
         fn will_block(&self) -> bool {
             self.block
         }
@@ -803,6 +943,8 @@ pub mod runtime {
     /// to make sure that it *also* decreases the count every time it goes out
     /// of scope. This implementation of `Drop` does just that so that we don't
     /// need to bookeep about when and where to subtract from the count.
+    /// 由于我们每次创建新任务时都会增加计数，因此我们还需要确保它在每次移出范围时都会减少计数。
+    /// 实现 `Drop` 可以实现上面功能，因此我们不需要在何时何地减去计数时进行对账。
     impl Drop for Task {
         fn drop(&mut self) {
             Runtime::get().tasks.fetch_sub(1, Ordering::Relaxed);
@@ -813,6 +955,8 @@ pub mod runtime {
     /// reschedule a task when it's ready to be polled. For our implementation
     /// we do a simple check to see if the task blocks or not and then spawn it back
     /// onto the executor in an appropriate manner.
+    /// `Wake` 是这个执行器的关键，因为它使我们能够在任务准备好被poll时重新安排任务。
+    /// 对于我们的实现，我们进行了一个简单的检查，以查看任务是否阻塞，然后以适当的方式将其重新放回执行器。
     impl Wake for Task {
         fn wake(self: Arc<Self>) {
             if self.will_block() {
@@ -835,8 +979,15 @@ pub mod runtime {
 // If you're interested in learning even more about async Rust or you want to
 // learn more in-depth things about it, then I recommend reading this list
 // of resources and articles I've found useful that are worth your time:
-//
+// 这就是它了！一个完整的异步运行时，注释及代码全部不到1000行。
+// 大部分实际都是注释。我希望这使得 Rust 异步执行器的工作方式不再神奇，而是更易于理解。
+// 注释很多，但最终只是跟踪状态和几个循环就可以让程序工作。
+// 如果你想看看如何编写一个在生产中使用的更高性能的执行器，那么请考虑阅读 `tokio` 的源代码。
+// 我自己在阅读它时学到了很多，它很有趣，而且做了相当详细的记录。
+// 如果你对学习更多关于 Rust 异步或你想要了解更深入的东西感兴趣，那么我建议你阅读这个我认为有用的资源列表和文章，值得你的时间：
+
 // - Asynchronous Programming in Rust: https://rust-lang.github.io/async-book/01_getting_started/01_chapter.html
+// - The Tokio Book: https://tokio.rs/tokio/tutorial
 // - Getting in and out of trouble with Rust futures: https://fasterthanli.me/articles/getting-in-and-out-of-trouble-with-rust-futures
 // - Pin and Suffering: https://fasterthanli.me/articles/pin-and-suffering
 // - Understanding Rust futures by going way too deep: https://fasterthanli.me/articles/understanding-rust-futures-by-going-way-too-deep
@@ -849,6 +1000,9 @@ pub mod runtime {
 //   require reading other parts to understand a specific part in a really weird
 //   dependency graph of sorts, but armed with the knowledge of this executor it
 //   should be a bit easier to grok what it all means!
+// - 标准库文档中包含更多信息，值得阅读。下面是包含所有必要类型和特征的模块，以实际创建和运行异步代码。
+//   它们相当深入，有时需要阅读其他部分才能理解某个特定部分，这真是个奇怪的依赖顺序，
+//   但是有了这个执行器的知识，应该会更容易理解它们的含义！
 //   - task module: https://doc.rust-lang.org/stable/std/task/index.html
 //   - pin module: https://doc.rust-lang.org/stable/std/pin/index.html
 //   - future module: https://doc.rust-lang.org/stable/std/future/index.html
