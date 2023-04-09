@@ -65,9 +65,8 @@
 //! With all of that in mind, let's dig into it all!
 //! 请记住这一点，让我们深入了解它！
 
-use crate::runtime::Spawner;
 use chrono::Local;
-use std::fmt::Debug;
+
 use std::thread;
 
 pub mod futures {
@@ -227,15 +226,18 @@ fn library_test() {
     // We're going to import our Sleep future to make sure that it works,
     // because it's not a complicated future and it's easy to see the
     // asynchronous nature of the code.
+    // 我们要导入Sleep future，来确保它是可以正常工作的，因为它不是一个复杂的future，所以很容易看出代码的异步本质。
     use crate::{futures::Sleep, runtime};
     // We want some random numbers so that the sleep futures finish at different
     // times. If we didn't, then the code would look synchronous in nature even
     // if it isn't. This is because we schedule and poll tasks in what is
     // essentially a loop unless we use block_on.
+    // 我们需要一些随机数，这样sleep future就会在不同的时间结束，如果我们不这样做，那么代码看起来就像是同步的，
+    // 即使本质上它不是。这是因为我们在调度和poll任务时，实际上是在一个循环中，除非我们使用block_on。
     use rand::Rng;
     // We need to know the time to show when a future completes. Time is cursed
     // and it's best we dabble not too much in it.
-    use std::time::SystemTime;
+    // 我们需要知道时间，来显示future何时完成。时间是被诅咒的，所以我们最好不要太多地涉及它。
 
     println!(
         "1. Current thread name {} {} {}",
@@ -864,7 +866,7 @@ pub mod runtime {
         /// constructs a `Task` and then pushes it to the back of the queue.
         /// 这是 `spawn` 函数，用于在队列中实际创建新的 `Task`。
         /// 它接收 `Future`，构造一个 `Task`，然后将其推送到队列的末尾。
-        fn spawn(self, future: impl Future<Output=()> + Send + Sync + 'static) {
+        fn spawn(self, future: impl Future<Output = ()> + Send + Sync + 'static) {
             self.inner_spawn(Task::new(false, future));
         }
         /// This is the function that gets called by the `spawn_blocking` function to
@@ -874,7 +876,7 @@ pub mod runtime {
         /// this future completes.
         /// 这是 `spawn_blocking` 函数，用于在队列中实际创建新的 `Task`。
         /// 它接收 `Future`，构造一个 `Task`，然后将其推送到队列的前端，运行时将检查它是否应该阻塞，然后阻塞直到此 future 完成。
-        fn spawn_blocking(self, future: impl Future<Output=()> + Send + Sync + 'static) {
+        fn spawn_blocking(self, future: impl Future<Output = ()> + Send + Sync + 'static) {
             self.inner_spawn_blocking(Task::new(true, future));
         }
         /// This function just takes a `Task` and pushes it onto the queue. We use this
@@ -897,14 +899,14 @@ pub mod runtime {
 
     /// Spawn a non-blocking `Future` onto the `whorl` runtime
     /// 将非阻塞的 `Future` 放入 `whorl` 运行时
-    pub fn spawn(future: impl Future<Output=()> + Send + Sync + 'static) {
+    pub fn spawn(future: impl Future<Output = ()> + Send + Sync + 'static) {
         Runtime::spawner().spawn(future);
     }
 
     /// Block on a `Future` and stop others on the `whorl` runtime until this
     /// one completes.
     /// 阻塞 `Future`，并在 `whorl` 运行时停止其他任务，直到此任务完成。
-    pub fn block_on(future: impl Future<Output=()> + Send + Sync + 'static) {
+    pub fn block_on(future: impl Future<Output = ()> + Send + Sync + 'static) {
         // println!("block on called {} {}", current_thread_id(), current_time());
         Runtime::spawner().spawn_blocking(future);
     }
@@ -930,7 +932,7 @@ pub mod runtime {
         /// to worry about pinning or more complicated things in the runtime. We
         /// also need to make sure this is `Send + Sync` so we can use it across threads
         /// and so we lock the `Pin<Box<dyn Future>>` inside a `Mutex`.
-        future: Mutex<Pin<Box<dyn Future<Output=()> + Send + Sync + 'static>>>,
+        future: Mutex<Pin<Box<dyn Future<Output = ()> + Send + Sync + 'static>>>,
         /// We need a way to check if the runtime should block on this task and
         /// so we use a boolean here to check that!
         block: bool,
@@ -941,7 +943,7 @@ pub mod runtime {
         /// how many tasks there are, pinning the `Future`, and wrapping it all
         /// in an `Arc`.
         /// 构造新任务，并增加运行时中的任务数量，pinning `Future`，并将其包装在 `Arc` 中。
-        fn new(block: bool, future: impl Future<Output=()> + Send + Sync + 'static) -> Arc<Self> {
+        fn new(block: bool, future: impl Future<Output = ()> + Send + Sync + 'static) -> Arc<Self> {
             Runtime::get().tasks.fetch_add(1, Ordering::Relaxed);
             Arc::new(Task {
                 future: Mutex::new(Box::pin(future)),
