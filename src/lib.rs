@@ -128,13 +128,13 @@ pub mod futures {
     /// future it's used in without blocking the thread itself. It will be
     /// polled and if the timer is not up, then it will yield execution to the
     /// executor.
-    /// 用以阻塞当前线程的future，不会阻塞线程，而是阻塞当前future的执行，直到时间到了，才会继续执行当前future，
-    /// 而不是阻塞线程，所以不会阻塞其他future的执行，这是一个异步的sleep，而不是同步的sleep，同步的sleep会阻塞线程，
-    /// 也就是说，同步的sleep会阻塞其他future的执行。
+    /// 这是一个用以阻塞当前线程正在执行的future的future，不会阻塞线程，而是阻塞当前正在执行的future，直到时间到了，
+    /// 才会继续执行当前future，所以不会阻塞其他future的执行，这是一个异步的sleep，而不是同步的sleep，
+    /// 同步的sleep会阻塞线程，也就是说，同步的sleep会阻塞其他future的执行。
     pub struct Sleep {
         /// What time the future was created at, not when it was started to be
         /// polled.
-        /// future创建的时间，不是开始poll的时间
+        /// 当前future创建的时间，不是开始poll的时间
         now: SystemTime,
         /// How long in the future in ms we must wait till we return
         /// that the future has finished polling.
@@ -146,7 +146,7 @@ pub mod futures {
         /// A simple API whereby we take in how long the consumer of the API
         /// wants to sleep in ms and set now to the time of creation and
         /// return the type itself, which is a Future.
-        /// 一个简单的API，接收一个参数，这个参数是需要等待的时间，单位是ms，并设置当前时间为Sleep创建时间，
+        /// 一个简单的API，接收需要等待的时间，单位是ms，并设置当前时间为Sleep创建时间，
         /// 返回一个future，这个future就是Sleep。
         pub fn new(ms: u128) -> Self {
             Self {
@@ -183,6 +183,8 @@ pub mod futures {
             // we're ready and the future has slept enough. If not, we just say
             // that we're pending and need to be re-polled, because not enough
             // time has passed.
+            // 如果时间已经过去了足够的时间，那么我们就返回Ready，表示future已经准备好了，可以继续执行；
+            // 否则我们就返回Pending，表示future还没有准备好，需要再次调用poll方法。
             if self.now.elapsed().unwrap().as_millis() >= self.ms {
                 Poll::Ready(())
             } else {
@@ -302,7 +304,6 @@ fn library_test() {
                 // Since we're spawning futures inside futures, the order of
                 // execution can change.
                 // 在future等待一段时间后，它会生成另一个future，然后打印它已经完成。
-                // 这个生成的future会睡眠一段时间，然后打印它已经完成。
                 // 由于我们在future里面生成future，所以执行的顺序会改变。
                 runtime::spawn(async move {
                     Sleep::new(SECOND * random2).await;
@@ -731,6 +732,8 @@ pub mod runtime {
         /// A counter for how many Tasks are on the runtime. We use this in
         /// conjunction with `wait` to block until there are no more tasks on
         /// the executor.
+        /// 一个计数器，用于记录运行时上有多少任务。
+        /// 我们将其与 `wait` 结合使用，以阻塞直到执行器上没有更多任务。
         ///
         tasks: AtomicUsize,
     }
